@@ -57,8 +57,45 @@ watch(
             if (props.initialItem) {
                 title.value = `Secret for ${props.initialItem.decrypted?.title || props.initialItem.title}`;
                 const dec = props.initialItem.decrypted;
-                if (dec?.password) {
-                    secretContent.value = `Username: ${dec.username || 'N/A'}\nPassword: ${dec.password}`;
+                if (
+                    props.initialItem.type === 'server' ||
+                    dec?.host ||
+                    dec?.privateKey ||
+                    dec?.sshPassword
+                ) {
+                    const lines: string[] = [];
+                    if (dec?.host)
+                        lines.push(
+                            `Host: ${dec.host}${dec.port ? ':' + dec.port : ''}`,
+                        );
+                    if (dec?.username) lines.push(`Username: ${dec.username}`);
+                    if (dec?.sshPassword)
+                        lines.push(`SSH Password: ${dec.sshPassword}`);
+                    if (dec?.privateKeyFileName)
+                        lines.push(`Key File: ${dec.privateKeyFileName}`);
+                    if (dec?.privateKey) lines.push(`\n${dec.privateKey}`);
+                    if (dec?.notes) lines.push(`\nNotes:\n${dec.notes}`);
+                    secretContent.value = lines.join('\n');
+                } else if (props.initialItem.type === 'card') {
+                    const lines: string[] = [];
+                    if (dec?.cardholder)
+                        lines.push(`Cardholder: ${dec.cardholder}`);
+                    if (dec?.cardNumber)
+                        lines.push(`Card Number: ${dec.cardNumber}`);
+                    if (dec?.expMonth && dec?.expYear)
+                        lines.push(`Expires: ${dec.expMonth}/${dec.expYear}`);
+                    if (dec?.cvv) lines.push(`CVV: ${dec.cvv}`);
+                    if (dec?.pin) lines.push(`PIN: ${dec.pin}`);
+                    if (dec?.notes) lines.push(`\nNotes:\n${dec.notes}`);
+                    secretContent.value = lines.join('\n');
+                } else if (dec?.password) {
+                    const lines: string[] = [];
+                    if (dec.url) lines.push(`URL: ${dec.url}`);
+                    if (dec.username) lines.push(`Username: ${dec.username}`);
+                    lines.push(`Password: ${dec.password}`);
+                    if (dec.totp) lines.push(`TOTP Secret: ${dec.totp}`);
+                    if (dec.notes) lines.push(`\nNotes:\n${dec.notes}`);
+                    secretContent.value = lines.join('\n');
                 } else if (dec?.notes) {
                     secretContent.value = dec.notes;
                 } else {

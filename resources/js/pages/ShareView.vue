@@ -5,15 +5,17 @@ import {
     Check,
     Clock,
     Copy,
+    Download,
     Eye,
     EyeOff,
+    FileKey,
     Flame,
     Lock,
     ShieldAlert,
     ShieldCheck,
     Sparkles,
 } from '@lucide/vue';
-import { onMounted, ref } from 'vue';
+import { computed, onMounted, ref } from 'vue';
 import { toast } from 'vue-sonner';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -133,6 +135,47 @@ async function handleCopy() {
     } catch {
         toast.error('Failed to copy.');
     }
+}
+
+const extractedKey = computed(() => {
+    if (!decryptedContent.value) return null;
+    const content = decryptedContent.value;
+    const pemMatch = content.match(
+        /-----BEGIN [A-Z0-9\s_-]+KEY-----[\s\S]+?-----END [A-Z0-9\s_-]+KEY-----/i,
+    );
+    const ppkMatch = content.match(/PuTTY-User-Key-File-[\s\S]+/i);
+
+    if (!pemMatch && !ppkMatch) return null;
+
+    const fileMatch = content.match(/Key File:\s*([^\r\n]+)/i);
+    const keyData = pemMatch ? pemMatch[0].trim() : ppkMatch![0].trim();
+    const isPpk = !!ppkMatch;
+    const filename = fileMatch
+        ? fileMatch[1].trim()
+        : isPpk
+          ? 'server-key.ppk'
+          : 'server-key.pem';
+
+    return {
+        key: keyData,
+        filename,
+    };
+});
+
+function downloadExtractedKey() {
+    if (!extractedKey.value) return;
+    const blob = new Blob([extractedKey.value.key], {
+        type: 'application/x-pem-file',
+    });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = extractedKey.value.filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    toast.success(`Downloaded ${extractedKey.value.filename}`);
 }
 </script>
 
@@ -269,21 +312,33 @@ async function handleCopy() {
                                 class="text-xs font-semibold tracking-wider text-muted-foreground uppercase"
                                 >Secret Content</Label
                             >
-                            <Button
-                                size="sm"
-                                variant="outline"
-                                class="h-8 gap-1.5"
-                                @click="handleCopy"
-                            >
-                                <Check
-                                    v-if="isCopied"
-                                    class="h-3.5 w-3.5 text-emerald-500"
-                                />
-                                <Copy v-else class="h-3.5 w-3.5" />
-                                <span>{{
-                                    isCopied ? 'Copied!' : 'Copy to Clipboard'
-                                }}</span>
-                            </Button>
+                            <div class="flex items-center gap-1.5">
+                                <Button
+                                    v-if="extractedKey"
+                                    size="sm"
+                                    variant="outline"
+                                    class="h-8 gap-1.5 border-purple-500/30 text-purple-600 hover:bg-purple-500/10 dark:text-purple-400"
+                                    @click="downloadExtractedKey"
+                                >
+                                    <Download class="h-3.5 w-3.5" />
+                                    <span>Download {{ extractedKey.filename }}</span>
+                                </Button>
+                                <Button
+                                    size="sm"
+                                    variant="outline"
+                                    class="h-8 gap-1.5"
+                                    @click="handleCopy"
+                                >
+                                    <Check
+                                        v-if="isCopied"
+                                        class="h-3.5 w-3.5 text-emerald-500"
+                                    />
+                                    <Copy v-else class="h-3.5 w-3.5" />
+                                    <span>{{
+                                        isCopied ? 'Copied!' : 'Copy to Clipboard'
+                                    }}</span>
+                                </Button>
+                            </div>
                         </div>
 
                         <div

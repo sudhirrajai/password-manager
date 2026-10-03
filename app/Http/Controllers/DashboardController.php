@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Enums\TeamRole;
 use App\Models\Team;
 use App\Models\TeamInvitation;
 use App\Models\VaultItem;
@@ -34,6 +35,8 @@ class DashboardController extends Controller
                 ],
             ]);
 
+        $canManageTrash = $current_team->is_personal || ($user->teamRole($current_team)?->isAtLeast(TeamRole::Admin) ?? false);
+
         $stats = [
             'total' => VaultItem::where('team_id', $current_team->id)->count(),
             'logins' => VaultItem::where('team_id', $current_team->id)->where('type', 'login')->count(),
@@ -41,7 +44,7 @@ class DashboardController extends Controller
             'notes' => VaultItem::where('team_id', $current_team->id)->where('type', 'note')->count(),
             'servers' => VaultItem::where('team_id', $current_team->id)->where('type', 'server')->count(),
             'favorites' => VaultItem::where('team_id', $current_team->id)->where('is_favorite', true)->count(),
-            'trash' => VaultItem::onlyTrashed()->where('team_id', $current_team->id)->count(),
+            'trash' => $canManageTrash ? VaultItem::onlyTrashed()->where('team_id', $current_team->id)->count() : 0,
         ];
 
         return Inertia::render('Dashboard', [
@@ -53,6 +56,8 @@ class DashboardController extends Controller
                 'name' => $current_team->name,
                 'slug' => $current_team->slug,
                 'is_personal' => (bool) $current_team->is_personal,
+                'can_manage_trash' => $canManageTrash,
+                'user_role' => $user->teamRole($current_team)?->value ?? ($current_team->is_personal ? 'owner' : 'member'),
             ],
         ]);
     }

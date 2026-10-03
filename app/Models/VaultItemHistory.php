@@ -2,7 +2,6 @@
 
 namespace App\Models;
 
-use Database\Factories\VaultKeyFactory;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
@@ -11,30 +10,32 @@ use Illuminate\Support\Carbon;
 
 /**
  * @property int $id
- * @property int $user_id
- * @property string $vault_salt
- * @property string $encrypted_vault_key
- * @property string $vault_key_iv
- * @property string|null $recovery_salt
- * @property string|null $encrypted_recovery_key
- * @property string|null $recovery_key_iv
+ * @property int $vault_item_id
+ * @property int|null $user_id
+ * @property string $encrypted_data
+ * @property string $iv
  * @property Carbon|null $created_at
  * @property Carbon|null $updated_at
- * @property-read User $user
+ * @property-read VaultItem $vaultItem
+ * @property-read User|null $user
  */
 #[Fillable([
+    'vault_item_id',
     'user_id',
-    'vault_salt',
-    'encrypted_vault_key',
-    'vault_key_iv',
-    'recovery_salt',
-    'encrypted_recovery_key',
-    'recovery_key_iv',
+    'encrypted_data',
+    'iv',
 ])]
-class VaultKey extends Model
+class VaultItemHistory extends Model
 {
-    /** @use HasFactory<VaultKeyFactory> */
     use HasFactory;
+
+    /**
+     * @return BelongsTo<VaultItem, $this>
+     */
+    public function vaultItem(): BelongsTo
+    {
+        return $this->belongsTo(VaultItem::class);
+    }
 
     /**
      * @return BelongsTo<User, $this>

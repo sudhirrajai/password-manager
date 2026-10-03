@@ -539,3 +539,39 @@ export async function generateTotpCode(
         return { code: '------', remainingSeconds: 0 };
     }
 }
+
+// -------------------------------------------------------------
+// Vault Master Recovery Key Generator & Deriver
+// -------------------------------------------------------------
+
+const RECOVERY_CHARSET = '23456789ABCDEFGHJKLMNPQRSTUVWXYZ';
+
+export function generateRecoveryKey(): { formattedKey: string; rawKey: string } {
+    const bytes = new Uint8Array(24);
+    window.crypto.getRandomValues(bytes);
+    let raw = '';
+    for (let i = 0; i < 24; i++) {
+        raw += RECOVERY_CHARSET[bytes[i] % RECOVERY_CHARSET.length];
+    }
+
+    // Format in blocks of 4: XXXX-XXXX-XXXX-XXXX-XXXX-XXXX
+    const formatted = raw.match(/.{1,4}/g)?.join('-') || raw;
+    return {
+        formattedKey: formatted,
+        rawKey: raw,
+    };
+}
+
+export function normalizeRecoveryKey(key: string): string {
+    return key.replace(/[\s-]/g, '').toUpperCase();
+}
+
+export async function deriveKeyFromRecoveryKey(
+    recoveryKey: string,
+    saltBase64: string,
+    iterations = 100000,
+): Promise<CryptoKey> {
+    const cleanKey = normalizeRecoveryKey(recoveryKey);
+    return deriveKeyFromPassword(cleanKey, saltBase64, iterations);
+}
+

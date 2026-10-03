@@ -3,6 +3,8 @@ import {
     CreditCard,
     Eye,
     EyeOff,
+    FileCode,
+    FileKey,
     FileText,
     Key,
     Lock,
@@ -10,6 +12,8 @@ import {
     Sparkles,
     Star,
     Timer,
+    Upload,
+    X,
 } from '@lucide/vue';
 import { computed, reactive, ref, watch } from 'vue';
 import { toast } from 'vue-sonner';
@@ -66,8 +70,11 @@ const form = reactive<DecryptedPayload>({
     cvv: '',
     pin: '',
     host: '',
-    port: '',
+    port: '22',
+    authType: 'key',
+    sshPassword: '',
     privateKey: '',
+    privateKeyFileName: '',
 });
 
 // Live TOTP preview if a secret is entered
@@ -108,8 +115,11 @@ watch(
             form.cvv = dec.cvv || '';
             form.pin = dec.pin || '';
             form.host = dec.host || '';
-            form.port = dec.port || '';
+            form.port = dec.port || '22';
+            form.authType = dec.authType || (dec.sshPassword ? 'password' : 'key');
+            form.sshPassword = dec.sshPassword || '';
             form.privateKey = dec.privateKey || '';
+            form.privateKeyFileName = dec.privateKeyFileName || '';
         } else {
             resetForm();
         }
@@ -135,12 +145,38 @@ function resetForm() {
     form.cvv = '';
     form.pin = '';
     form.host = '';
-    form.port = '';
+    form.port = '22';
+    form.authType = 'key';
+    form.sshPassword = '';
     form.privateKey = '';
+    form.privateKeyFileName = '';
+}
+
+function onKeyFileUpload(event: Event) {
+    const input = event.target as HTMLInputElement;
+    if (input.files && input.files[0]) {
+        const file = input.files[0];
+        form.privateKeyFileName = file.name;
+        const reader = new FileReader();
+        reader.onload = (e) => {
+            form.privateKey = (e.target?.result as string) || '';
+            toast.success(`Loaded key from ${file.name}`);
+        };
+        reader.readAsText(file);
+    }
+}
+
+function clearUploadedKey() {
+    form.privateKey = '';
+    form.privateKeyFileName = '';
 }
 
 const passwordStrength = computed(() => {
     return form.password ? calculatePasswordStrength(form.password) : null;
+});
+
+const sshPasswordStrength = computed(() => {
+    return form.sshPassword ? calculatePasswordStrength(form.sshPassword) : null;
 });
 
 async function handleSave() {
@@ -516,7 +552,7 @@ async function handleSave() {
                             <Input
                                 id="server-host"
                                 v-model="form.host"
-                                placeholder="ssh.example.com"
+                                placeholder="ssh.example.com or 192.168.1.100"
                             />
                         </div>
                         <div class="space-y-1.5">
@@ -530,24 +566,139 @@ async function handleSave() {
                     </div>
 
                     <div class="space-y-1.5">
-                        <Label for="server-user">Username</Label>
+                        <Label for="server-user">SSH Username</Label>
                         <Input
                             id="server-user"
                             v-model="form.username"
-                            placeholder="root or ubuntu"
+                            placeholder="root, ubuntu, or ec2-user"
                         />
                     </div>
 
-                    <div class="space-y-1.5">
-                        <Label for="server-key">Private Key / API Secret</Label>
-                        <textarea
-                            id="server-key"
-                            v-model="form.privateKey"
-                            rows="4"
-                            class="w-full rounded-md border border-input bg-background px-3 py-2 font-mono text-xs shadow-xs focus-visible:ring-1 focus-visible:ring-ring focus-visible:outline-none"
-                            placeholder="-----BEGIN OPENSSH PRIVATE KEY-----..."
-                        />
+                    <!-- Auth Method Selector Tabs -->
+                    <div class="space-y-2 pt-1">
+                        <Label>Authentication Method</Label>
+                        <div class="grid grid-cols-2 gap-1 rounded-lg bg-muted p-1 text-xs font-medium">
+                            <button
+                                type="button"
+                                class="flex items-center justify-center gap-1.5 rounded-md py-1.5 transition-colors"
+                                :class="form.authType === 'key' ? 'bg-background font-semibold text-foreground shadow-xs' : 'text-muted-foreground hover:text-foreground'"
+                                @click="form.authType = 'key'"
+                            >
+                                <FileKey class="h-3.5 w-3.5" />
+                                <span>Private Key (.pem / .ppk)</span>
+                            </button>
+                            <button
+                                type="button"
+                                class="flex items-center justify-center gap-1.5 rounded-md py-1.5 transition-colors"
+                                :class="form.authType === 'password' ? 'bg-background font-semibold text-foreground shadow-xs' : 'text-muted-foreground hover:text-foreground'"
+                                @click="form.authType = 'password'"
+                            >
+                                <Key class="h-3.5 w-3.5" />
+                                <span>SSH Password</span>
+                            </button>
+                        </div>
                     </div>
+
+                    <!-- PRIVATE KEY OPTION -->
+                    <template v-if="form.authType === 'key'">
+                        <div class="space-y-2">
+                            <!-- File Upload Zone -->
+                            <div class="space-y-1.5">
+                                <Label>Upload Key File (.pem, .ppk, .key)</Label>
+                                <label class="flex flex-1 items-center justify-center gap-2 rounded-xl border border-dashed border-input bg-muted/20 px-3 py-3 text-xs text-muted-foreground hover:bg-muted/40 hover:border-primary/50 transition-colors cursor-pointer">
+                                    <Upload class="h-4 w-4" />
+                                    <span>Click to upload .pem or .ppk key file</span>
+                                    <input
+                                        type="file"
+                                        accept=".pem,.ppk,.key,.id_rsa,.pub,text/*"
+                                        class="hidden"
+                                        @change="onKeyFileUpload"
+                                    />
+                                </label>
+                            </div>
+
+                            <!-- Uploaded file badge if any -->
+                            <div v-if="form.privateKeyFileName" class="flex items-center justify-between rounded-lg border border-primary/30 bg-primary/10 px-3 py-1.5 text-xs text-primary font-medium">
+                                <span class="flex items-center gap-1.5 truncate">
+                                    <FileCode class="h-4 w-4 shrink-0" />
+                                    <strong class="truncate">{{ form.privateKeyFileName }}</strong>
+                                </span>
+                                <button
+                                    type="button"
+                                    class="text-muted-foreground hover:text-destructive p-0.5"
+                                    @click="clearUploadedKey"
+                                    title="Remove uploaded key"
+                                >
+                                    <X class="h-4 w-4" />
+                                </button>
+                            </div>
+
+                            <div class="space-y-1.5">
+                                <Label for="server-key">Private Key Content</Label>
+                                <textarea
+                                    id="server-key"
+                                    v-model="form.privateKey"
+                                    rows="4"
+                                    class="w-full rounded-md border border-input bg-background px-3 py-2 font-mono text-xs shadow-xs focus-visible:ring-1 focus-visible:ring-ring focus-visible:outline-none"
+                                    placeholder="-----BEGIN RSA PRIVATE KEY-----&#10;...or PuTTY-User-Key-File-2:..."
+                                />
+                            </div>
+                        </div>
+                    </template>
+
+                    <!-- SSH PASSWORD OPTION -->
+                    <template v-else>
+                        <div class="space-y-1.5">
+                            <div class="flex items-center justify-between">
+                                <Label for="server-password">SSH Password / Passphrase</Label>
+                                <Button
+                                    type="button"
+                                    variant="ghost"
+                                    size="sm"
+                                    class="h-7 px-1.5 text-xs text-primary gap-1"
+                                    @click="showGeneratorModal = true"
+                                >
+                                    <Sparkles class="h-3 w-3" />
+                                    <span>Generate</span>
+                                </Button>
+                            </div>
+                            <div class="relative">
+                                <Input
+                                    id="server-password"
+                                    v-model="form.sshPassword"
+                                    :type="showPassword ? 'text' : 'password'"
+                                    placeholder="Enter SSH password"
+                                    class="pr-10 font-mono text-sm"
+                                />
+                                <button
+                                    type="button"
+                                    class="absolute inset-y-0 right-0 flex items-center pr-3 text-muted-foreground hover:text-foreground"
+                                    @click="showPassword = !showPassword"
+                                >
+                                    <EyeOff v-if="showPassword" class="h-4 w-4" />
+                                    <Eye v-else class="h-4 w-4" />
+                                </button>
+                            </div>
+
+                            <div v-if="sshPasswordStrength && form.sshPassword" class="pt-1 space-y-1">
+                                <div class="flex justify-between text-[11px] text-muted-foreground">
+                                    <span>Strength: <strong :class="sshPasswordStrength.color">{{ sshPasswordStrength.label }}</strong></span>
+                                    <span>{{ sshPasswordStrength.entropy }} bits</span>
+                                </div>
+                                <div class="h-1 w-full bg-muted rounded-full overflow-hidden">
+                                    <div
+                                        class="h-full rounded-full transition-all"
+                                        :class="[
+                                            sshPasswordStrength.score === 1 ? 'w-1/4 bg-red-500' :
+                                            sshPasswordStrength.score === 2 ? 'w-2/4 bg-orange-500' :
+                                            sshPasswordStrength.score === 3 ? 'w-3/4 bg-yellow-500' :
+                                            'w-full bg-emerald-500'
+                                        ]"
+                                    />
+                                </div>
+                            </div>
+                        </div>
+                    </template>
                 </template>
 
                 <!-- Common Notes (except for note type which already has it) -->

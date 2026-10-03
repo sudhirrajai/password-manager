@@ -81,4 +81,12 @@ class VaultItem extends Model
     {
         return $this->hasMany(VaultAuditLog::class);
     }
+
+    /**
+     * @return HasMany<VaultItemHistory, $this>
+     */
+    public function histories(): HasMany
+    {
+        return $this->hasMany(VaultItemHistory::class)->latest('id');
+    }
 }

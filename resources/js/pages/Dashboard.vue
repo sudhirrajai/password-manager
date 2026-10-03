@@ -10,6 +10,7 @@ import {
     Flame,
     History,
     Key,
+    LifeBuoy,
     Lock,
     Plus,
     RefreshCw,
@@ -32,6 +33,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Spinner } from '@/components/ui/spinner';
+import EmergencyKitModal from '@/components/vault/EmergencyKitModal.vue';
 import ImportExportModal from '@/components/vault/ImportExportModal.vue';
 import PasswordGeneratorModal from '@/components/vault/PasswordGeneratorModal.vue';
 import SecretShareModal from '@/components/vault/SecretShareModal.vue';
@@ -61,6 +63,8 @@ const props = defineProps<{
         name: string;
         slug: string;
         is_personal: boolean;
+        can_manage_trash?: boolean;
+        user_role?: string;
     };
 }>();
 
@@ -87,6 +91,10 @@ const {
     auditAction,
 } = useVault();
 
+const canManageTrash = computed(() => {
+    return props.team.is_personal || (props.team.can_manage_trash ?? false);
+});
+
 // Navigation & Category states
 type CategoryFilter =
     | 'all'
@@ -99,6 +107,12 @@ type CategoryFilter =
     | 'audit';
 const currentCategory = ref<CategoryFilter>('all');
 const searchQuery = ref('');
+
+watch(canManageTrash, (allowed) => {
+    if (!allowed && currentCategory.value === 'trash') {
+        currentCategory.value = 'all';
+    }
+});
 
 // Items state
 const items = ref<VaultItemData[]>([]);
@@ -114,6 +128,7 @@ const showShareModal = ref(false);
 const sharingItem = ref<VaultItemData | null>(null);
 const showImportExportModal = ref(false);
 const showActivityModal = ref(false);
+const showEmergencyKitModal = ref(false);
 
 // Initialize team context
 onMounted(async () => {
@@ -124,9 +139,7 @@ onMounted(async () => {
         props.team.is_personal,
     );
     await checkVaultStatus();
-    if (!isUnlocked.value) {
-        showUnlockModal.value = true;
-    } else {
+    if (isUnlocked.value) {
         await loadItems();
     }
 });
@@ -141,6 +154,7 @@ watch(
             props.team.is_personal,
         );
         selectedItem.value = null;
+        showUnlockModal.value = false;
         if (isUnlocked.value) {
             await loadItems();
         }
@@ -158,6 +172,10 @@ async function loadItems() {
     isLoadingItems.value = true;
     try {
         const isTrash = currentCategory.value === 'trash';
+        if (isTrash && !canManageTrash.value) {
+            currentCategory.value = 'all';
+            return;
+        }
         const url = `/${props.team.slug}/vault/items?trash=${isTrash ? 1 : 0}`;
         const res = await fetch(url, {
             headers: { Accept: 'application/json' },
@@ -474,6 +492,19 @@ async function quickCopyPassword(item: VaultItemData, e: Event) {
                     v-if="isUnlocked"
                     variant="outline"
                     size="sm"
+                    class="gap-1.5 border-amber-500/30 text-amber-600 hover:bg-amber-500/10 dark:text-amber-400"
+                    @click="showEmergencyKitModal = true"
+                    title="Emergency Recovery Key for all vaults"
+                >
+                    <LifeBuoy class="h-3.5 w-3.5" />
+                    <span class="hidden md:inline">Emergency Kit</span>
+                    <span class="md:hidden">Kit</span>
+                </Button>
+
+                <Button
+                    v-if="isUnlocked"
+                    variant="outline"
+                    size="sm"
                     class="gap-1.5"
                     @click="showActivityModal = true"
                 >
@@ -679,6 +710,7 @@ async function quickCopyPassword(item: VaultItemData, e: Event) {
             </button>
 
             <button
+                v-if="canManageTrash"
                 type="button"
                 class="ml-auto flex items-center gap-2 rounded-lg px-3 py-1.5 text-xs font-medium whitespace-nowrap transition-colors sm:text-sm"
                 :class="
@@ -894,13 +926,41 @@ async function quickCopyPassword(item: VaultItemData, e: Event) {
                         v-if="selectedItem"
                         :item="selectedItem"
                         :isTrash="currentCategory === 'trash'"
+                        :canManageTrash="canManageTrash"
                         @edit="(it) => handleEdit(it)"
                         @delete="(it) => handleDelete(it)"
                         @restore="(it) => handleRestore(it)"
                         @forceDelete="(it) => handleForceDelete(it)"
                         @share="(it) => handleShare(it)"
                         @favoriteToggle="(it) => handleFavoriteToggle(it)"
+                        @updated="(it) => handleItemSaved(it)"
                     />
+                    <div
+                        v-else-if="!isUnlocked"
+                        class="flex h-full flex-col items-center justify-center space-y-4 rounded-xl border border-sidebar-border/70 bg-card p-8 text-center text-muted-foreground"
+                    >
+                        <div
+                            class="flex h-16 w-16 items-center justify-center rounded-2xl bg-amber-500/10 text-amber-500 shadow-xs"
+                        >
+                            <Lock class="h-8 w-8" />
+                        </div>
+                        <div class="space-y-1">
+                            <h3 class="text-lg font-bold text-foreground">
+                                {{ team.is_personal ? 'Personal Vault' : `${team.name} Vault` }} is Locked
+                            </h3>
+                            <p class="max-w-sm text-xs leading-relaxed text-muted-foreground">
+                                All passwords and credentials for this workspace are protected by zero-knowledge encryption. Unlock to access them, or switch workspaces using the selector in the sidebar.
+                            </p>
+                        </div>
+                        <Button
+                            class="gap-1.5 font-semibold shadow-xs"
+                            @click="showUnlockModal = true"
+                        >
+                            <Unlock class="h-4 w-4" />
+                            <span>Unlock {{ team.is_personal ? 'Personal' : team.name }} Vault</span>
+                        </Button>
+                    </div>
+
                     <div
                         v-else
                         class="flex h-full flex-col items-center justify-center space-y-3 rounded-xl border border-sidebar-border/70 bg-card p-12 text-center text-muted-foreground"
@@ -921,7 +981,10 @@ async function quickCopyPassword(item: VaultItemData, e: Event) {
     </div>
 
     <!-- Modals -->
-    <VaultUnlockModal :open="showUnlockModal" @unlocked="onVaultUnlocked" />
+    <VaultUnlockModal
+        v-model:open="showUnlockModal"
+        @unlocked="onVaultUnlocked"
+    />
 
     <VaultItemModal
         :open="showItemModal"
@@ -952,5 +1015,10 @@ async function quickCopyPassword(item: VaultItemData, e: Event) {
     <VaultActivityModal
         :open="showActivityModal"
         @update:open="(val) => (showActivityModal = val)"
+    />
+
+    <EmergencyKitModal
+        :open="showEmergencyKitModal"
+        @update:open="(val) => (showEmergencyKitModal = val)"
     />
 </template>

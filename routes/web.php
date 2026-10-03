@@ -35,6 +35,9 @@ Route::prefix('{current_team}')
         // Vault Key Management (Master Key & Team Keys)
         Route::get('vault/key', [VaultKeyController::class, 'show'])->name('vault.key.show');
         Route::post('vault/key', [VaultKeyController::class, 'store'])->name('vault.key.store');
+        Route::post('vault/key/recover', [VaultKeyController::class, 'recover'])->name('vault.key.recover');
+        Route::post('vault/key/reset', [VaultKeyController::class, 'reset'])->name('vault.key.reset');
+        Route::post('vault/key/recovery-key', [VaultKeyController::class, 'updateRecoveryKey'])->name('vault.key.rotate-recovery');
 
         // Vault Items CRUD
         Route::get('vault/items', [VaultItemController::class, 'index'])->name('vault.items.index');
@@ -43,6 +46,8 @@ Route::prefix('{current_team}')
         Route::delete('vault/items/{item}', [VaultItemController::class, 'destroy'])->name('vault.items.destroy');
         Route::post('vault/items/{id}/restore', [VaultItemController::class, 'restore'])->name('vault.items.restore');
         Route::delete('vault/items/{id}/force', [VaultItemController::class, 'forceDelete'])->name('vault.items.force');
+        Route::get('vault/items/{item}/history', [VaultItemController::class, 'history'])->name('vault.items.history');
+        Route::post('vault/items/{item}/history/{history}/restore', [VaultItemController::class, 'restoreVersion'])->name('vault.items.history.restore');
         Route::post('vault/items/{item}/favorite', [VaultItemController::class, 'toggleFavorite'])->name('vault.items.favorite');
         Route::post('vault/items/audit', [VaultItemController::class, 'audit'])->name('vault.items.audit');
 

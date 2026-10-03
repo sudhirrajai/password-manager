@@ -4,10 +4,13 @@ import {
     Clock,
     Copy,
     CreditCard,
+    Download,
     ExternalLink,
     Eye,
     EyeOff,
+    FileKey,
     FileText,
+    History,
     Key,
     Pencil,
     Send,
@@ -22,6 +25,7 @@ import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import { toast } from 'vue-sonner';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import ItemVersionHistoryModal from '@/components/vault/ItemVersionHistoryModal.vue';
 import {
     type DecryptedPayload,
     useVault,
@@ -32,6 +36,7 @@ import { calculatePasswordStrength, generateTotpCode } from '@/lib/crypto';
 const props = defineProps<{
     item: VaultItemData;
     isTrash?: boolean;
+    canManageTrash?: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -41,14 +46,17 @@ const emit = defineEmits<{
     (e: 'forceDelete', item: VaultItemData): void;
     (e: 'share', item: VaultItemData): void;
     (e: 'favoriteToggle', item: VaultItemData): void;
+    (e: 'updated', item: VaultItemData): void;
 }>();
 
 const { copyToClipboardWithAutoClear, auditAction } = useVault();
 
+const showHistoryModal = ref(false);
 const showPassword = ref(false);
 const showCvv = ref(false);
 const showPin = ref(false);
 const showPrivateKey = ref(false);
+const showSshPassword = ref(false);
 
 const totpCode = ref<string>('------');
 const totpRemaining = ref<number>(30);
@@ -112,6 +120,29 @@ async function copyField(text: string, label: string) {
         props.item.id,
         props.item.title,
     );
+}
+
+function downloadKeyFile() {
+    if (!decrypted.value.privateKey) return;
+    const filename =
+        decrypted.value.privateKeyFileName ||
+        `${props.item.title.toLowerCase().replace(/[^a-z0-9_-]/g, '_') || 'server'}.pem`;
+    const blob = new Blob([decrypted.value.privateKey], {
+        type: 'application/x-pem-file',
+    });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    toast.success(`Downloaded ${filename}`);
+}
+
+function handleVersionRestored(updatedItem: VaultItemData) {
+    emit('updated', updatedItem);
 }
 </script>
 
@@ -190,6 +221,18 @@ async function copyField(text: string, label: string) {
 
             <!-- Action buttons -->
             <div class="flex items-center gap-2">
+                <!-- History button is always available to audit changes -->
+                <Button
+                    variant="outline"
+                    size="sm"
+                    class="gap-1.5"
+                    @click="showHistoryModal = true"
+                    title="View old passwords & credential version history"
+                >
+                    <History class="h-3.5 w-3.5" />
+                    <span>History</span>
+                </Button>
+
                 <template v-if="!isTrash">
                     <Button
                         variant="outline"
@@ -220,24 +263,31 @@ async function copyField(text: string, label: string) {
                     </Button>
                 </template>
                 <template v-else>
-                    <Button
-                        variant="outline"
-                        size="sm"
-                        class="gap-1.5 text-emerald-600"
-                        @click="emit('restore', item)"
-                    >
-                        <Undo2 class="h-3.5 w-3.5" />
-                        <span>Restore</span>
-                    </Button>
-                    <Button
-                        variant="destructive"
-                        size="sm"
-                        class="gap-1.5"
-                        @click="emit('forceDelete', item)"
-                    >
-                        <Trash2 class="h-3.5 w-3.5" />
-                        <span>Delete Permanently</span>
-                    </Button>
+                    <template v-if="canManageTrash !== false">
+                        <Button
+                            variant="outline"
+                            size="sm"
+                            class="gap-1.5 text-emerald-600 hover:text-emerald-700"
+                            @click="emit('restore', item)"
+                        >
+                            <Undo2 class="h-3.5 w-3.5" />
+                            <span>Restore</span>
+                        </Button>
+                        <Button
+                            variant="destructive"
+                            size="sm"
+                            class="gap-1.5"
+                            @click="emit('forceDelete', item)"
+                        >
+                            <Trash2 class="h-3.5 w-3.5" />
+                            <span>Delete Permanently</span>
+                        </Button>
+                    </template>
+                    <template v-else>
+                        <span class="rounded bg-muted px-2 py-1 text-xs text-muted-foreground">
+                            Trash managed by Admin/Owner
+                        </span>
+                    </template>
                 </template>
             </div>
         </div>
@@ -658,12 +708,96 @@ async function copyField(text: string, label: string) {
                     </Button>
                 </div>
 
-                <div v-if="decrypted.privateKey" class="space-y-1.5">
-                    <div class="flex items-center justify-between">
-                        <span class="text-xs font-medium text-muted-foreground"
-                            >Private Key / Secret</span
-                        >
+                <!-- SSH Password -->
+                <div
+                    v-if="
+                        decrypted.authType === 'password' ||
+                        decrypted.sshPassword
+                    "
+                    class="space-y-1.5"
+                >
+                    <div
+                        class="flex items-center justify-between rounded-lg border border-border/50 bg-muted/10 p-3"
+                    >
+                        <div class="flex-1 space-y-0.5 pr-2">
+                            <span
+                                class="text-xs font-medium text-muted-foreground"
+                                >SSH Password / Passphrase</span
+                            >
+                            <p
+                                class="font-mono text-sm text-foreground select-all"
+                            >
+                                {{
+                                    showSshPassword
+                                        ? decrypted.sshPassword
+                                        : '••••••••••••••••'
+                                }}
+                            </p>
+                        </div>
                         <div class="flex items-center gap-1">
+                            <Button
+                                variant="ghost"
+                                size="icon"
+                                class="h-8 w-8"
+                                @click="showSshPassword = !showSshPassword"
+                            >
+                                <EyeOff
+                                    v-if="showSshPassword"
+                                    class="h-4 w-4"
+                                />
+                                <Eye v-else class="h-4 w-4" />
+                            </Button>
+                            <Button
+                                variant="ghost"
+                                size="icon"
+                                class="h-8 w-8"
+                                @click="
+                                    copyField(
+                                        decrypted.sshPassword!,
+                                        'SSH Password',
+                                    )
+                                "
+                            >
+                                <Copy class="h-4 w-4" />
+                            </Button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Private Key (.pem / .ppk) -->
+                <div
+                    v-if="
+                        decrypted.authType === 'key' ||
+                        decrypted.privateKey
+                    "
+                    class="space-y-2 rounded-xl border border-border/60 bg-muted/10 p-4"
+                >
+                    <div class="flex flex-wrap items-center justify-between gap-2">
+                        <div class="flex items-center gap-2">
+                            <FileKey class="h-4 w-4 text-purple-500" />
+                            <span class="text-xs font-semibold text-foreground"
+                                >Private Key</span
+                            >
+                            <Badge
+                                v-if="decrypted.privateKeyFileName"
+                                variant="secondary"
+                                class="font-mono text-[11px]"
+                            >
+                                {{ decrypted.privateKeyFileName }}
+                            </Badge>
+                        </div>
+
+                        <div class="flex items-center gap-1.5">
+                            <Button
+                                v-if="decrypted.privateKey"
+                                variant="outline"
+                                size="sm"
+                                class="h-7 gap-1 text-xs"
+                                @click="downloadKeyFile"
+                            >
+                                <Download class="h-3.5 w-3.5" />
+                                <span>Download File</span>
+                            </Button>
                             <Button
                                 variant="ghost"
                                 size="icon"
@@ -677,6 +811,7 @@ async function copyField(text: string, label: string) {
                                 <Eye v-else class="h-3.5 w-3.5" />
                             </Button>
                             <Button
+                                v-if="decrypted.privateKey"
                                 variant="ghost"
                                 size="icon"
                                 class="h-7 w-7"
@@ -691,14 +826,22 @@ async function copyField(text: string, label: string) {
                             </Button>
                         </div>
                     </div>
+
                     <div
-                        class="max-h-48 overflow-x-auto rounded-lg border border-border/60 bg-muted/20 p-3 font-mono text-xs whitespace-pre text-foreground select-all"
+                        v-if="decrypted.privateKey"
+                        class="max-h-52 overflow-x-auto rounded-lg border border-border/60 bg-muted/30 p-3 font-mono text-xs whitespace-pre text-foreground select-all"
                     >
                         {{
                             showPrivateKey
                                 ? decrypted.privateKey
-                                : '••••••••••••••••••••••••••••••••'
+                                : '-----BEGIN ENCRYPTED PRIVATE KEY-----\n••••••••••••••••••••••••••••••••••••••••\n••••••••••••••••••••••••••••••••••••••••\n-----END ENCRYPTED PRIVATE KEY-----'
                         }}
+                    </div>
+                    <div
+                        v-else
+                        class="rounded-lg border border-dashed border-border/60 p-3 text-center text-xs text-muted-foreground"
+                    >
+                        No private key uploaded.
                     </div>
                 </div>
             </template>
@@ -720,4 +863,12 @@ async function copyField(text: string, label: string) {
             </div>
         </div>
     </div>
+
+    <!-- Credential Version History Modal -->
+    <ItemVersionHistoryModal
+        v-model:open="showHistoryModal"
+        :item="item"
+        :current-item-decrypted="decrypted"
+        @restored="handleVersionRestored"
+    />
 </template>
