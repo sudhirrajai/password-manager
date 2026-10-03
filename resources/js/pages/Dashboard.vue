@@ -95,6 +95,7 @@ const {
     isTeamKeyConfigured,
     userHasTeamKey,
     linkTeamVaultWithPassphrase,
+    syncTeamVaultKey,
 } = useVault();
 
 const canManageTrash = computed(() => {
@@ -169,6 +170,21 @@ async function onTeamKeyLinked() {
 }
 
 // Initialize team context
+const isSyncingKey = ref(false);
+
+async function handleSyncTeamKey() {
+    isSyncingKey.value = true;
+    try {
+        const ok = await syncTeamVaultKey();
+        if (ok) {
+            await checkVaultStatus();
+            await loadItems();
+        }
+    } finally {
+        isSyncingKey.value = false;
+    }
+}
+
 onMounted(async () => {
     setTeamContext(
         props.team.slug,
@@ -179,6 +195,14 @@ onMounted(async () => {
     await checkVaultStatus();
     await checkJoinKeyFromUrl();
     if (isUnlocked.value) {
+        if (!props.team.is_personal && !userHasTeamKey.value && canManageTrash.value) {
+            try {
+                await syncTeamVaultKey();
+                await checkVaultStatus();
+            } catch {
+                // Ignore
+            }
+        }
         await loadItems();
     }
 });
@@ -197,6 +221,14 @@ watch(
         await checkVaultStatus();
         await checkJoinKeyFromUrl();
         if (isUnlocked.value) {
+            if (!props.team.is_personal && !userHasTeamKey.value && canManageTrash.value) {
+                try {
+                    await syncTeamVaultKey();
+                    await checkVaultStatus();
+                } catch {
+                    // Ignore
+                }
+            }
             await loadItems();
         }
     },
@@ -212,10 +244,17 @@ async function onVaultUnlocked() {
                 window.history.replaceState(null, '', window.location.pathname);
                 pendingJoinKey.value = '';
             }
+        } else if (canManageTrash.value) {
+            try {
+                const ok = await syncTeamVaultKey();
+                if (ok) {
+                    await checkVaultStatus();
+                }
+            } catch {
+                showTeamSetupModal.value = true;
+            }
         } else if (isTeamKeyConfigured.value) {
             showTeamLinkModal.value = true;
-        } else if (canManageTrash.value) {
-            showTeamSetupModal.value = true;
         }
     }
     await loadItems();
@@ -573,7 +612,20 @@ async function quickCopyPassword(item: VaultItemData, e: Event) {
                     <span class="hidden lg:inline">Activity</span>
                 </Button>
 
-                <!-- Team Vault Access Key / Link button -->
+                <!-- Team Vault Sync / Access Key / Link button -->
+                <Button
+                    v-if="!team.is_personal && isUnlocked && canManageTrash"
+                    variant="outline"
+                    size="sm"
+                    class="gap-1.5 border-emerald-500/30 text-emerald-600 hover:bg-emerald-500/10 dark:text-emerald-400"
+                    @click="handleSyncTeamKey"
+                    title="Sync Team Vault Key with all team members"
+                >
+                    <RefreshCw class="h-3.5 w-3.5" :class="{ 'animate-spin': isSyncingKey }" />
+                    <span class="hidden md:inline">Sync Team Key</span>
+                    <span class="md:hidden">Sync</span>
+                </Button>
+
                 <Button
                     v-if="!team.is_personal && isUnlocked && canManageTrash"
                     variant="outline"
@@ -642,30 +694,32 @@ async function quickCopyPassword(item: VaultItemData, e: Event) {
             <div class="flex items-center gap-2">
                 <AlertCircle class="h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400" />
                 <span>
-                    <strong class="font-semibold">Team Vault Access Required:</strong>
-                    {{ isTeamKeyConfigured
-                        ? 'Enter the Team Access Key provided by your workspace admin to unlock and view passwords in this workspace.'
-                        : 'The workspace owner has not configured the Team Vault Key yet. Ask an admin to click "Team Access Key" above.' }}
+                    <strong class="font-semibold">Team Vault Access:</strong>
+                    {{ canManageTrash
+                        ? 'Click "Sync Team Key" to activate shared vault encryption for all invited team members.'
+                        : (isTeamKeyConfigured
+                            ? 'Enter the Team Access Key or refresh to unlock and view passwords in this workspace.'
+                            : 'The workspace owner has not synchronized the Team Vault yet. Please ask the team owner or admin to open this team workspace to activate shared access.') }}
                 </span>
             </div>
             <div class="flex items-center gap-2">
                 <Button
-                    v-if="isTeamKeyConfigured"
+                    v-if="canManageTrash"
+                    size="sm"
+                    class="h-7 text-xs bg-emerald-600 hover:bg-emerald-700 text-white shrink-0 gap-1"
+                    @click="handleSyncTeamKey"
+                >
+                    <RefreshCw class="h-3 w-3" :class="{ 'animate-spin': isSyncingKey }" />
+                    <span>Sync Team Key</span>
+                </Button>
+                <Button
+                    v-else-if="isTeamKeyConfigured"
                     size="sm"
                     class="h-7 text-xs bg-amber-600 hover:bg-amber-700 text-white shrink-0 gap-1"
                     @click="showTeamLinkModal = true"
                 >
                     <Key class="h-3 w-3" />
                     <span>Enter Team Key</span>
-                </Button>
-                <Button
-                    v-else-if="canManageTrash"
-                    size="sm"
-                    class="h-7 text-xs bg-primary text-primary-foreground shrink-0 gap-1"
-                    @click="showTeamSetupModal = true"
-                >
-                    <Key class="h-3 w-3" />
-                    <span>Configure Team Key</span>
                 </Button>
             </div>
         </div>

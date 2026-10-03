@@ -437,4 +437,45 @@ test('owner can configure team vault passphrase and member can link with team ke
         ]);
 });
 
+test('team owner can sync team vault key and member seamlessly receives team_vault_key_raw', function () {
+    $owner = User::factory()->create();
+    $team = Team::factory()->create(['is_personal' => false]);
+    $team->memberships()->create(['user_id' => $owner->id, 'role' => TeamRole::Owner]);
+    $owner->switchTeam($team);
+
+    $member = User::factory()->create();
+    $team->memberships()->create(['user_id' => $member->id, 'role' => TeamRole::Member]);
+    $member->switchTeam($team);
+
+    $rawKeyBase64 = base64_encode('32-byte-secret-aes-gcm-team-key!');
+
+    // Member cannot sync team key (403 forbidden)
+    $this->actingAs($member)
+        ->postJson(route('vault.key.team.sync', $team->slug), [
+            'raw_key' => $rawKeyBase64,
+        ])
+        ->assertForbidden();
+
+    // Owner can sync team key
+    $syncResponse = $this->actingAs($owner)
+        ->postJson(route('vault.key.team.sync', $team->slug), [
+            'raw_key' => $rawKeyBase64,
+        ]);
+
+    $syncResponse->assertOk()
+        ->assertJson(['is_team_key_configured' => true]);
+
+    // Member can now fetch team keys and gets team_vault_key_raw matching the synced key!
+    $memberResponse = $this->actingAs($member)
+        ->getJson(route('vault.key.show', $team->slug));
+
+    $memberResponse->assertOk()
+        ->assertJson([
+            'is_team_vault' => true,
+            'is_team_key_configured' => true,
+            'user_has_team_key' => true,
+            'team_vault_key_raw' => $rawKeyBase64,
+        ]);
+});
+
 

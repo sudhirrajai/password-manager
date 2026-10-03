@@ -11,6 +11,7 @@ use App\Models\VaultItem;
 use App\Models\VaultKey;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Crypt;
 
 class VaultKeyController extends Controller
 {
@@ -23,7 +24,7 @@ class VaultKeyController extends Controller
 
         $userVaultKey = $user->vaultKey;
         $teamVaultKey = null;
-        $teamVaultConfig = null;
+        $teamVaultKeyRaw = null;
 
         if (! $current_team->is_personal) {
             $teamVaultKey = TeamVaultKey::query()
@@ -31,12 +32,13 @@ class VaultKeyController extends Controller
                 ->where('user_id', $user->id)
                 ->first();
 
-            $teamVaultConfig = [
-                'is_configured' => ! empty($current_team->encrypted_vault_key),
-                'vault_salt' => $current_team->vault_salt,
-                'encrypted_vault_key' => $current_team->encrypted_vault_key,
-                'vault_key_iv' => $current_team->vault_key_iv,
-            ];
+            if (! empty($current_team->encrypted_vault_key)) {
+                try {
+                    $teamVaultKeyRaw = Crypt::decryptString($current_team->encrypted_vault_key);
+                } catch (\Throwable) {
+                    $teamVaultKeyRaw = null;
+                }
+            }
         }
 
         return response()->json([
@@ -52,10 +54,17 @@ class VaultKeyController extends Controller
                 'encrypted_team_key' => $teamVaultKey->encrypted_team_key,
                 'team_key_iv' => $teamVaultKey->team_key_iv,
             ] : null,
-            'team_vault_config' => $teamVaultConfig,
-            'user_has_team_key' => $teamVaultKey !== null,
+            'team_vault_key_raw' => $teamVaultKeyRaw,
+            'is_team_key_configured' => $teamVaultKeyRaw !== null || ! empty($current_team->encrypted_vault_key),
+            'user_has_team_key' => $teamVaultKeyRaw !== null || $teamVaultKey !== null,
             'is_team_vault' => ! $current_team->is_personal,
             'team_name' => $current_team->name,
+            'team_vault_config' => ! empty($current_team->encrypted_vault_key) ? [
+                'is_configured' => true,
+                'vault_salt' => $current_team->vault_salt,
+                'encrypted_vault_key' => $current_team->encrypted_vault_key,
+                'vault_key_iv' => $current_team->vault_key_iv,
+            ] : null,
         ]);
     }
 
@@ -323,4 +332,42 @@ class VaultKeyController extends Controller
             'user_has_team_key' => true,
         ]);
     }
+
+    /**
+     * Synchronize the team vault key using Laravel application-level envelope encryption.
+     * Team owners or administrators can sync their active encryption key so all team members
+     * can view, decrypt, and manage shared credentials seamlessly without key mismatch.
+     */
+    public function syncTeamKey(Request $request, Team $current_team): JsonResponse
+    {
+        abort_if($current_team->is_personal, 400, 'Personal vaults do not have team keys.');
+
+        $user = $request->user();
+        $isOwnerOrAdmin = $user->teamRole($current_team)?->isAtLeast(TeamRole::Admin) ?? false;
+
+        abort_unless($isOwnerOrAdmin, 403, 'Only team owners or administrators can sync the team vault key.');
+
+        $validated = $request->validate([
+            'raw_key' => ['required', 'string'],
+        ]);
+
+        $current_team->update([
+            'encrypted_vault_key' => Crypt::encryptString($validated['raw_key']),
+        ]);
+
+        VaultAuditLog::create([
+            'user_id' => $user->id,
+            'team_id' => $current_team->id,
+            'action' => 'synced_team_vault_key',
+            'item_title' => 'Team Vault Key Synchronized',
+            'ip_address' => $request->ip(),
+            'user_agent' => $request->userAgent(),
+        ]);
+
+        return response()->json([
+            'message' => 'Team vault key synchronized successfully.',
+            'is_team_key_configured' => true,
+        ]);
+    }
 }
+

@@ -40,6 +40,7 @@ Route::prefix('{current_team}')
         Route::post('vault/key/recovery-key', [VaultKeyController::class, 'updateRecoveryKey'])->name('vault.key.rotate-recovery');
         Route::post('vault/key/team/setup', [VaultKeyController::class, 'setupTeamKey'])->name('vault.key.team.setup');
         Route::post('vault/key/team/link', [VaultKeyController::class, 'linkTeamKey'])->name('vault.key.team.link');
+        Route::post('vault/key/team/sync', [VaultKeyController::class, 'syncTeamKey'])->name('vault.key.team.sync');
 
         // Vault Items CRUD
         Route::get('vault/items', [VaultItemController::class, 'index'])->name('vault.items.index');

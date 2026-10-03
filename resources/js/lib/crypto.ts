@@ -575,3 +575,29 @@ export async function deriveKeyFromRecoveryKey(
     return deriveKeyFromPassword(cleanKey, saltBase64, iterations);
 }
 
+/**
+ * Export a CryptoKey to a raw base64 string
+ */
+export async function exportKeyToBase64(key: CryptoKey): Promise<string> {
+    const raw = await window.crypto.subtle.exportKey('raw', key);
+    return bufferToBase64(raw);
+}
+
+/**
+ * Import a CryptoKey from a raw base64 string
+ */
+export async function importKeyFromBase64(base64: string): Promise<CryptoKey> {
+    const buffer = base64ToBuffer(base64);
+    return window.crypto.subtle.importKey(
+        'raw',
+        buffer,
+        {
+            name: 'AES-GCM',
+            length: 256,
+        },
+        true,
+        ['encrypt', 'decrypt'],
+    );
+}
+
+

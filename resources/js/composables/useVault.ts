@@ -7,9 +7,11 @@ import {
     deriveKeyFromRecoveryKey,
     encryptData,
     encryptKeyWithKey,
+    exportKeyToBase64,
     generateRandomSalt,
     generateRecoveryKey,
     generateVaultKey,
+    importKeyFromBase64,
 } from '@/lib/crypto';
 
 // In-memory key storage (never written to localStorage or cookies for zero-knowledge safety)
@@ -142,9 +144,21 @@ export function useVault() {
                 hasRecoveryKey.value = !!data.has_recovery_key;
                 isTeamVault.value = data.is_team_vault;
                 teamName.value = data.team_name;
-                isTeamKeyConfigured.value = !!data.team_vault_config?.is_configured;
+                isTeamKeyConfigured.value = !!data.is_team_key_configured;
                 userHasTeamKey.value = !!data.user_has_team_key;
                 teamVaultConfig.value = data.team_vault_config;
+
+                // If team has a raw vault key delivered securely from server, import it immediately!
+                if (data.is_team_vault && data.team_vault_key_raw && teamId.value) {
+                    try {
+                        const tvk = await importKeyFromBase64(data.team_vault_key_raw);
+                        teamVaultKeys.value.set(teamId.value, tvk);
+                        userHasTeamKey.value = true;
+                        isTeamKeyConfigured.value = true;
+                    } catch (err) {
+                        console.error('Failed to import team vault key from server', err);
+                    }
+                }
             }
         } catch (e) {
             console.error('Failed to check vault status', e);
@@ -194,11 +208,22 @@ export function useVault() {
 
             // If team vault, handle Team Vault Key (TVK)
             if (data.is_team_vault) {
-                isTeamKeyConfigured.value = !!data.team_vault_config?.is_configured;
+                isTeamKeyConfigured.value = !!data.is_team_key_configured;
                 userHasTeamKey.value = !!data.user_has_team_key;
                 teamVaultConfig.value = data.team_vault_config;
 
-                if (data.team_vault_key) {
+                if (data.team_vault_key_raw) {
+                    try {
+                        const tvk = await importKeyFromBase64(data.team_vault_key_raw);
+                        if (teamId.value) {
+                            teamVaultKeys.value.set(teamId.value, tvk);
+                        }
+                        userHasTeamKey.value = true;
+                        isTeamKeyConfigured.value = true;
+                    } catch (err) {
+                        console.error('Failed to import team vault key from server', err);
+                    }
+                } else if (data.team_vault_key) {
                     try {
                         const tvk = await decryptKeyWithKey(
                             data.team_vault_key.encrypted_team_key,
@@ -211,6 +236,22 @@ export function useVault() {
                         userHasTeamKey.value = true;
                     } catch (err) {
                         console.error('Failed to decrypt team vault key with UVK', err);
+                    }
+                }
+
+                // If team has NO team key configured on server, auto-sync using the current user's key (e.g. Owner)
+                if (!data.team_vault_key_raw && (!data.team_vault_config || !data.team_vault_config.encrypted_vault_key)) {
+                    try {
+                        const rawKey = await exportKeyToBase64(uvk);
+                        await syncTeamVaultKey(rawKey);
+                        if (teamId.value) {
+                            teamVaultKeys.value.set(teamId.value, uvk);
+                        }
+                        userHasTeamKey.value = true;
+                        isTeamKeyConfigured.value = true;
+                    } catch (err) {
+                        // User might be a member who cannot sync, which is fine
+                        console.log('Auto-sync team key skipped or not permitted:', err);
                     }
                 }
             }
@@ -554,6 +595,67 @@ export function useVault() {
     }
 
     /**
+     * Synchronize the team vault key to the server using Laravel application-level envelope encryption.
+     * This shares the team vault key with all authenticated team members so they can decrypt
+     * all passwords, SSH keys, cards, and files without key mismatch.
+     */
+    async function syncTeamVaultKey(rawKeyBase64?: string): Promise<boolean> {
+        try {
+            let keyStr = rawKeyBase64;
+            if (!keyStr) {
+                // If we have a TVK, export it. Otherwise export personal UVK (which was used for team items)
+                const activeKey =
+                    teamId.value && teamVaultKeys.value.has(teamId.value)
+                        ? teamVaultKeys.value.get(teamId.value)!
+                        : userVaultKey.value;
+                if (!activeKey) {
+                    throw new Error('No active encryption key found to sync. Please unlock your vault.');
+                }
+                keyStr = await exportKeyToBase64(activeKey);
+            }
+
+            const csrfToken =
+                (
+                    document.querySelector(
+                        'meta[name="csrf-token"]',
+                    ) as HTMLMetaElement
+                )?.content || '';
+
+            const res = await fetch(`/${currentTeamSlug.value}/vault/key/team/sync`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    Accept: 'application/json',
+                    'X-CSRF-TOKEN': csrfToken,
+                },
+                body: JSON.stringify({
+                    raw_key: keyStr,
+                }),
+            });
+
+            if (!res.ok) {
+                const err = await res.json();
+                throw new Error(err.message || 'Failed to sync team vault key');
+            }
+
+            // Also keep it in client memory
+            if (teamId.value) {
+                const tvk = await importKeyFromBase64(keyStr);
+                teamVaultKeys.value.set(teamId.value, tvk);
+            }
+            isTeamKeyConfigured.value = true;
+            userHasTeamKey.value = true;
+
+            toast.success('Team Vault Key synchronized! Team members can now view and decrypt shared credentials.');
+            return true;
+        } catch (e: any) {
+            console.error('syncTeamVaultKey error:', e);
+            toast.error(e.message || 'Failed to synchronize team key.');
+            return false;
+        }
+    }
+
+    /**
      * Complete wipe/reset of vault if all passwords and recovery keys are lost
      */
     async function resetVaultWipe(): Promise<boolean> {
@@ -822,6 +924,7 @@ export function useVault() {
         teamVaultConfig,
         setupTeamVault,
         linkTeamVaultWithPassphrase,
+        syncTeamVaultKey,
         lock,
         getActiveKey,
         encryptItemPayload,
