@@ -359,3 +359,82 @@ test('updating item encrypted payload creates version history record and allows 
     expect($item->histories()->count())->toBe(2);
 });
 
+test('owner can configure team vault passphrase and member can link with team key', function () {
+    $owner = User::factory()->create();
+    $team = Team::factory()->create(['is_personal' => false]);
+    $team->memberships()->create(['user_id' => $owner->id, 'role' => TeamRole::Owner]);
+    $owner->switchTeam($team);
+
+    $member = User::factory()->create();
+    $team->memberships()->create(['user_id' => $member->id, 'role' => TeamRole::Member]);
+    $member->switchTeam($team);
+
+    // Member attempts to setup team key -> 403 Forbidden
+    $this->actingAs($member)
+        ->postJson(route('vault.key.team.setup', $team->slug), [
+            'vault_salt' => 'salt_123',
+            'encrypted_vault_key' => 'enc_tvk_blob',
+            'vault_key_iv' => 'iv_123',
+            'user_encrypted_team_key' => 'enc_tvk_for_user',
+            'user_team_key_iv' => 'iv_456',
+        ])
+        ->assertForbidden();
+
+    // Owner sets up team key with team passphrase
+    $setupResponse = $this->actingAs($owner)
+        ->postJson(route('vault.key.team.setup', $team->slug), [
+            'vault_salt' => 'salt_123',
+            'encrypted_vault_key' => 'enc_tvk_blob',
+            'vault_key_iv' => 'iv_123',
+            'user_encrypted_team_key' => 'enc_tvk_for_owner',
+            'user_team_key_iv' => 'iv_owner',
+        ]);
+
+    $setupResponse->assertOk()
+        ->assertJson([
+            'team_vault_config' => [
+                'is_configured' => true,
+                'vault_salt' => 'salt_123',
+                'encrypted_vault_key' => 'enc_tvk_blob',
+            ],
+            'user_has_team_key' => true,
+        ]);
+
+    // Check show endpoint for member: team key is configured, but member hasn't linked yet
+    $showMemberResponse = $this->actingAs($member)
+        ->getJson(route('vault.key.show', $team->slug));
+
+    $showMemberResponse->assertOk()
+        ->assertJson([
+            'is_team_vault' => true,
+            'team_vault_config' => [
+                'is_configured' => true,
+            ],
+            'user_has_team_key' => false,
+        ]);
+
+    // Member links with team key
+    $linkResponse = $this->actingAs($member)
+        ->postJson(route('vault.key.team.link', $team->slug), [
+            'encrypted_team_key' => 'enc_tvk_for_member',
+            'team_key_iv' => 'iv_member',
+        ]);
+
+    $linkResponse->assertOk()
+        ->assertJson(['user_has_team_key' => true]);
+
+    // Check show endpoint again for member: now user_has_team_key is true!
+    $showMemberResponseAfter = $this->actingAs($member)
+        ->getJson(route('vault.key.show', $team->slug));
+
+    $showMemberResponseAfter->assertOk()
+        ->assertJson([
+            'user_has_team_key' => true,
+            'team_vault_key' => [
+                'encrypted_team_key' => 'enc_tvk_for_member',
+                'team_key_iv' => 'iv_member',
+            ],
+        ]);
+});
+
+

@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\Vault;
 
+use App\Enums\TeamRole;
 use App\Http\Controllers\Controller;
 use App\Models\Team;
 use App\Models\TeamVaultKey;
@@ -22,12 +23,20 @@ class VaultKeyController extends Controller
 
         $userVaultKey = $user->vaultKey;
         $teamVaultKey = null;
+        $teamVaultConfig = null;
 
         if (! $current_team->is_personal) {
             $teamVaultKey = TeamVaultKey::query()
                 ->where('team_id', $current_team->id)
                 ->where('user_id', $user->id)
                 ->first();
+
+            $teamVaultConfig = [
+                'is_configured' => ! empty($current_team->encrypted_vault_key),
+                'vault_salt' => $current_team->vault_salt,
+                'encrypted_vault_key' => $current_team->encrypted_vault_key,
+                'vault_key_iv' => $current_team->vault_key_iv,
+            ];
         }
 
         return response()->json([
@@ -43,6 +52,8 @@ class VaultKeyController extends Controller
                 'encrypted_team_key' => $teamVaultKey->encrypted_team_key,
                 'team_key_iv' => $teamVaultKey->team_key_iv,
             ] : null,
+            'team_vault_config' => $teamVaultConfig,
+            'user_has_team_key' => $teamVaultKey !== null,
             'is_team_vault' => ! $current_team->is_personal,
             'team_name' => $current_team->name,
         ]);
@@ -210,6 +221,106 @@ class VaultKeyController extends Controller
         return response()->json([
             'message' => 'Emergency Recovery Key updated successfully.',
             'has_recovery_key' => true,
+        ]);
+    }
+
+    /**
+     * Setup Team Vault Key with Team Passphrase / Access Key.
+     */
+    public function setupTeamKey(Request $request, Team $current_team): JsonResponse
+    {
+        abort_if($current_team->is_personal, 400, 'Personal vaults do not have team keys.');
+
+        $user = $request->user();
+
+        // Must be Owner or Admin to configure team key
+        $role = $user->teamRole($current_team);
+        abort_unless($role?->isAtLeast(TeamRole::Admin), 403, 'Only Admins and Owners can configure the Team Vault Passphrase.');
+
+        $validated = $request->validate([
+            'vault_salt' => ['required', 'string', 'max:255'],
+            'encrypted_vault_key' => ['required', 'string'],
+            'vault_key_iv' => ['required', 'string', 'max:255'],
+            'user_encrypted_team_key' => ['required', 'string'],
+            'user_team_key_iv' => ['required', 'string', 'max:255'],
+        ]);
+
+        $current_team->update([
+            'vault_salt' => $validated['vault_salt'],
+            'encrypted_vault_key' => $validated['encrypted_vault_key'],
+            'vault_key_iv' => $validated['vault_key_iv'],
+        ]);
+
+        // Link for current user (the admin/owner who configured it)
+        TeamVaultKey::updateOrCreate(
+            [
+                'team_id' => $current_team->id,
+                'user_id' => $user->id,
+            ],
+            [
+                'encrypted_team_key' => $validated['user_encrypted_team_key'],
+                'team_key_iv' => $validated['user_team_key_iv'],
+            ]
+        );
+
+        VaultAuditLog::create([
+            'user_id' => $user->id,
+            'team_id' => $current_team->id,
+            'action' => 'setup_team_key',
+            'item_title' => 'Team Vault Key Configured',
+            'ip_address' => $request->ip(),
+            'user_agent' => $request->userAgent(),
+        ]);
+
+        return response()->json([
+            'message' => 'Team Vault Key configured successfully.',
+            'team_vault_config' => [
+                'is_configured' => true,
+                'vault_salt' => $current_team->vault_salt,
+                'encrypted_vault_key' => $current_team->encrypted_vault_key,
+                'vault_key_iv' => $current_team->vault_key_iv,
+            ],
+            'user_has_team_key' => true,
+        ]);
+    }
+
+    /**
+     * Link an existing Team Vault Key to the authenticated user's account.
+     */
+    public function linkTeamKey(Request $request, Team $current_team): JsonResponse
+    {
+        abort_if($current_team->is_personal, 400, 'Personal vaults do not have team keys.');
+
+        $user = $request->user();
+
+        $validated = $request->validate([
+            'encrypted_team_key' => ['required', 'string'],
+            'team_key_iv' => ['required', 'string', 'max:255'],
+        ]);
+
+        TeamVaultKey::updateOrCreate(
+            [
+                'team_id' => $current_team->id,
+                'user_id' => $user->id,
+            ],
+            [
+                'encrypted_team_key' => $validated['encrypted_team_key'],
+                'team_key_iv' => $validated['team_key_iv'],
+            ]
+        );
+
+        VaultAuditLog::create([
+            'user_id' => $user->id,
+            'team_id' => $current_team->id,
+            'action' => 'linked_team_vault',
+            'item_title' => 'User Linked Team Vault',
+            'ip_address' => $request->ip(),
+            'user_agent' => $request->userAgent(),
+        ]);
+
+        return response()->json([
+            'message' => 'Team Vault linked to your account successfully.',
+            'user_has_team_key' => true,
         ]);
     }
 }

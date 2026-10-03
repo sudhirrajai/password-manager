@@ -22,6 +22,14 @@ const isTeamVault = ref(false);
 const teamName = ref('');
 const teamId = ref<number | null>(null);
 const currentTeamSlug = ref('');
+const isTeamKeyConfigured = ref(false);
+const userHasTeamKey = ref(false);
+const teamVaultConfig = ref<{
+    is_configured: boolean;
+    vault_salt: string;
+    encrypted_vault_key: string;
+    vault_key_iv: string;
+} | null>(null);
 const autoLockTimer = ref<number | null>(null);
 const autoLockMinutes = ref(15);
 
@@ -112,12 +120,16 @@ export function useVault() {
         isConfigured: boolean;
         isUnlocked: boolean;
         hasRecoveryKey: boolean;
+        isTeamKeyConfigured: boolean;
+        userHasTeamKey: boolean;
     }> {
         if (!currentTeamSlug.value)
             return {
                 isConfigured: isConfigured.value,
                 isUnlocked: isUnlocked.value,
                 hasRecoveryKey: hasRecoveryKey.value,
+                isTeamKeyConfigured: isTeamKeyConfigured.value,
+                userHasTeamKey: userHasTeamKey.value,
             };
 
         try {
@@ -130,6 +142,9 @@ export function useVault() {
                 hasRecoveryKey.value = !!data.has_recovery_key;
                 isTeamVault.value = data.is_team_vault;
                 teamName.value = data.team_name;
+                isTeamKeyConfigured.value = !!data.team_vault_config?.is_configured;
+                userHasTeamKey.value = !!data.user_has_team_key;
+                teamVaultConfig.value = data.team_vault_config;
             }
         } catch (e) {
             console.error('Failed to check vault status', e);
@@ -139,6 +154,8 @@ export function useVault() {
             isConfigured: isConfigured.value,
             isUnlocked: isUnlocked.value,
             hasRecoveryKey: hasRecoveryKey.value,
+            isTeamKeyConfigured: isTeamKeyConfigured.value,
+            userHasTeamKey: userHasTeamKey.value,
         };
     }
 
@@ -175,15 +192,26 @@ export function useVault() {
             userVaultKey.value = uvk;
             hasRecoveryKey.value = !!data.has_recovery_key;
 
-            // If team vault, decrypt Team Vault Key (TVK)
-            if (data.is_team_vault && data.team_vault_key) {
-                const tvk = await decryptKeyWithKey(
-                    data.team_vault_key.encrypted_team_key,
-                    data.team_vault_key.team_key_iv,
-                    uvk,
-                );
-                if (teamId.value) {
-                    teamVaultKeys.value.set(teamId.value, tvk);
+            // If team vault, handle Team Vault Key (TVK)
+            if (data.is_team_vault) {
+                isTeamKeyConfigured.value = !!data.team_vault_config?.is_configured;
+                userHasTeamKey.value = !!data.user_has_team_key;
+                teamVaultConfig.value = data.team_vault_config;
+
+                if (data.team_vault_key) {
+                    try {
+                        const tvk = await decryptKeyWithKey(
+                            data.team_vault_key.encrypted_team_key,
+                            data.team_vault_key.team_key_iv,
+                            uvk,
+                        );
+                        if (teamId.value) {
+                            teamVaultKeys.value.set(teamId.value, tvk);
+                        }
+                        userHasTeamKey.value = true;
+                    } catch (err) {
+                        console.error('Failed to decrypt team vault key with UVK', err);
+                    }
                 }
             }
 
@@ -377,6 +405,151 @@ export function useVault() {
             console.error(e);
             toast.error(e.message || 'Invalid recovery key or recovery failed.');
             return { success: false };
+        }
+    }
+
+    /**
+     * Configure Team Vault with a Passphrase or Access Key.
+     */
+    async function setupTeamVault(
+        teamPassphrase: string,
+    ): Promise<boolean> {
+        try {
+            if (!userVaultKey.value) {
+                throw new Error('Your personal vault must be unlocked first.');
+            }
+
+            const salt = generateRandomSalt(32);
+            const teamDerivedKey = await deriveKeyFromPassword(teamPassphrase, salt);
+
+            // If we already have a TVK in memory, use it; otherwise use the UVK (which may have encrypted existing items), or generate a new one
+            let tvk: CryptoKey;
+            if (teamId.value && teamVaultKeys.value.has(teamId.value)) {
+                tvk = teamVaultKeys.value.get(teamId.value)!;
+            } else {
+                tvk = userVaultKey.value;
+            }
+
+            // Encrypt TVK with Team Passphrase derived key
+            const teamEnc = await encryptKeyWithKey(tvk, teamDerivedKey);
+
+            // Encrypt TVK with user's personal UVK for fast auto-unlock
+            const userEnc = await encryptKeyWithKey(tvk, userVaultKey.value);
+
+            const csrfToken =
+                (
+                    document.querySelector(
+                        'meta[name="csrf-token"]',
+                    ) as HTMLMetaElement
+                )?.content || '';
+
+            const res = await fetch(`/${currentTeamSlug.value}/vault/key/team/setup`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    Accept: 'application/json',
+                    'X-CSRF-TOKEN': csrfToken,
+                },
+                body: JSON.stringify({
+                    vault_salt: salt,
+                    encrypted_vault_key: teamEnc.encryptedKey,
+                    vault_key_iv: teamEnc.iv,
+                    user_encrypted_team_key: userEnc.encryptedKey,
+                    user_team_key_iv: userEnc.iv,
+                }),
+            });
+
+            if (!res.ok) {
+                const err = await res.json();
+                throw new Error(err.message || 'Failed to setup team vault');
+            }
+
+            const data = await res.json();
+            if (teamId.value) {
+                teamVaultKeys.value.set(teamId.value, tvk);
+            }
+            isTeamKeyConfigured.value = true;
+            userHasTeamKey.value = true;
+            teamVaultConfig.value = data.team_vault_config;
+
+            toast.success('Team Vault Passphrase configured successfully!');
+            return true;
+        } catch (e: any) {
+            toast.error(e.message || 'Failed to configure team vault.');
+            return false;
+        }
+    }
+
+    /**
+     * Link an existing Team Vault to the current user's account using the Team Passphrase / Access Key.
+     */
+    async function linkTeamVaultWithPassphrase(
+        teamPassphrase: string,
+    ): Promise<boolean> {
+        try {
+            if (!userVaultKey.value) {
+                throw new Error('Your personal vault must be unlocked first.');
+            }
+
+            if (!teamVaultConfig.value || !teamVaultConfig.value.encrypted_vault_key) {
+                throw new Error('Team vault has not been configured by the owner yet.');
+            }
+
+            // Derive key from entered passphrase using team's salt
+            const teamDerivedKey = await deriveKeyFromPassword(
+                teamPassphrase,
+                teamVaultConfig.value.vault_salt,
+            );
+
+            // Decrypt Team Vault Key (TVK)
+            let tvk: CryptoKey;
+            try {
+                tvk = await decryptKeyWithKey(
+                    teamVaultConfig.value.encrypted_vault_key,
+                    teamVaultConfig.value.vault_key_iv,
+                    teamDerivedKey,
+                );
+            } catch {
+                throw new Error('Incorrect Team Access Key or Passphrase.');
+            }
+
+            // Encrypt TVK with user's personal UVK for seamless future logins
+            const userEnc = await encryptKeyWithKey(tvk, userVaultKey.value);
+
+            const csrfToken =
+                (
+                    document.querySelector(
+                        'meta[name="csrf-token"]',
+                    ) as HTMLMetaElement
+                )?.content || '';
+
+            const res = await fetch(`/${currentTeamSlug.value}/vault/key/team/link`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    Accept: 'application/json',
+                    'X-CSRF-TOKEN': csrfToken,
+                },
+                body: JSON.stringify({
+                    encrypted_team_key: userEnc.encryptedKey,
+                    team_key_iv: userEnc.iv,
+                }),
+            });
+
+            if (!res.ok) {
+                const err = await res.json();
+                throw new Error(err.message || 'Failed to link team vault');
+            }
+
+            if (teamId.value) {
+                teamVaultKeys.value.set(teamId.value, tvk);
+            }
+            userHasTeamKey.value = true;
+            toast.success('Team Vault linked and unlocked successfully!');
+            return true;
+        } catch (e: any) {
+            toast.error(e.message || 'Failed to link team vault.');
+            return false;
         }
     }
 
@@ -644,6 +817,11 @@ export function useVault() {
         recoverVaultWithKey,
         rotateRecoveryKey,
         resetVaultWipe,
+        isTeamKeyConfigured,
+        userHasTeamKey,
+        teamVaultConfig,
+        setupTeamVault,
+        linkTeamVaultWithPassphrase,
         lock,
         getActiveKey,
         encryptItemPayload,

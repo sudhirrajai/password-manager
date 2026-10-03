@@ -19,6 +19,9 @@ use Illuminate\Support\Carbon;
  * @property string $name
  * @property string $slug
  * @property bool $is_personal
+ * @property string|null $vault_salt
+ * @property string|null $encrypted_vault_key
+ * @property string|null $vault_key_iv
  * @property Carbon|null $created_at
  * @property Carbon|null $updated_at
  * @property Carbon|null $deleted_at
@@ -26,7 +29,7 @@ use Illuminate\Support\Carbon;
  * @property-read Collection<int, Membership> $memberships
  * @property-read Collection<int, User> $members
  */
-#[Fillable(['name', 'slug', 'is_personal'])]
+#[Fillable(['name', 'slug', 'is_personal', 'vault_salt', 'encrypted_vault_key', 'vault_key_iv'])]
 class Team extends Model
 {
     /** @use HasFactory<TeamFactory> */

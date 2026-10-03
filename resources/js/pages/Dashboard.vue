@@ -2,6 +2,7 @@
 import { Head, usePage } from '@inertiajs/vue3';
 import {
     Activity,
+    AlertCircle,
     CreditCard,
     Download,
     Eye,
@@ -38,6 +39,8 @@ import ImportExportModal from '@/components/vault/ImportExportModal.vue';
 import PasswordGeneratorModal from '@/components/vault/PasswordGeneratorModal.vue';
 import SecretShareModal from '@/components/vault/SecretShareModal.vue';
 import SecurityAuditView from '@/components/vault/SecurityAuditView.vue';
+import TeamVaultLinkModal from '@/components/vault/TeamVaultLinkModal.vue';
+import TeamVaultSetupModal from '@/components/vault/TeamVaultSetupModal.vue';
 import VaultActivityModal from '@/components/vault/VaultActivityModal.vue';
 import VaultItemDetails from '@/components/vault/VaultItemDetails.vue';
 import VaultItemModal from '@/components/vault/VaultItemModal.vue';
@@ -89,6 +92,9 @@ const {
     decryptItem,
     copyToClipboardWithAutoClear,
     auditAction,
+    isTeamKeyConfigured,
+    userHasTeamKey,
+    linkTeamVaultWithPassphrase,
 } = useVault();
 
 const canManageTrash = computed(() => {
@@ -129,6 +135,38 @@ const sharingItem = ref<VaultItemData | null>(null);
 const showImportExportModal = ref(false);
 const showActivityModal = ref(false);
 const showEmergencyKitModal = ref(false);
+const showTeamSetupModal = ref(false);
+const showTeamLinkModal = ref(false);
+const pendingJoinKey = ref<string>('');
+
+async function checkJoinKeyFromUrl() {
+    if (typeof window === 'undefined') return;
+    const hash = window.location.hash.replace(/^#/, '');
+    if (!hash) return;
+    const params = new URLSearchParams(hash);
+    const key = params.get('team_key') || params.get('join_key');
+    if (key) {
+        pendingJoinKey.value = key;
+        if (isUnlocked.value && !props.team.is_personal && !userHasTeamKey.value) {
+            const linked = await linkTeamVaultWithPassphrase(key);
+            if (linked) {
+                window.history.replaceState(null, '', window.location.pathname);
+                pendingJoinKey.value = '';
+                await loadItems();
+            }
+        }
+    }
+}
+
+async function onTeamKeyConfigured() {
+    await checkVaultStatus();
+    await loadItems();
+}
+
+async function onTeamKeyLinked() {
+    await checkVaultStatus();
+    await loadItems();
+}
 
 // Initialize team context
 onMounted(async () => {
@@ -139,6 +177,7 @@ onMounted(async () => {
         props.team.is_personal,
     );
     await checkVaultStatus();
+    await checkJoinKeyFromUrl();
     if (isUnlocked.value) {
         await loadItems();
     }
@@ -155,6 +194,8 @@ watch(
         );
         selectedItem.value = null;
         showUnlockModal.value = false;
+        await checkVaultStatus();
+        await checkJoinKeyFromUrl();
         if (isUnlocked.value) {
             await loadItems();
         }
@@ -163,11 +204,31 @@ watch(
 
 async function onVaultUnlocked() {
     showUnlockModal.value = false;
+    await checkVaultStatus();
+    if (!props.team.is_personal && !userHasTeamKey.value) {
+        if (pendingJoinKey.value) {
+            const ok = await linkTeamVaultWithPassphrase(pendingJoinKey.value);
+            if (ok) {
+                window.history.replaceState(null, '', window.location.pathname);
+                pendingJoinKey.value = '';
+            }
+        } else if (isTeamKeyConfigured.value) {
+            showTeamLinkModal.value = true;
+        } else if (canManageTrash.value) {
+            showTeamSetupModal.value = true;
+        }
+    }
     await loadItems();
 }
 
 async function loadItems() {
     if (!isUnlocked.value) return;
+
+    if (!props.team.is_personal && !userHasTeamKey.value) {
+        items.value = [];
+        selectedItem.value = null;
+        return;
+    }
 
     isLoadingItems.value = true;
     try {
@@ -512,6 +573,31 @@ async function quickCopyPassword(item: VaultItemData, e: Event) {
                     <span class="hidden lg:inline">Activity</span>
                 </Button>
 
+                <!-- Team Vault Access Key / Link button -->
+                <Button
+                    v-if="!team.is_personal && isUnlocked && canManageTrash"
+                    variant="outline"
+                    size="sm"
+                    class="gap-1.5 border-primary/30 text-primary hover:bg-primary/10"
+                    @click="showTeamSetupModal = true"
+                    title="Configure Team Access Key & 1-Click Link"
+                >
+                    <Users class="h-3.5 w-3.5" />
+                    <span class="hidden md:inline">Team Access Key</span>
+                    <span class="md:hidden">Key</span>
+                </Button>
+
+                <Button
+                    v-if="!team.is_personal && isUnlocked && !userHasTeamKey"
+                    size="sm"
+                    class="gap-1.5 bg-amber-600 hover:bg-amber-700 text-white shadow-xs"
+                    @click="showTeamLinkModal = true"
+                    title="Enter Team Access Key to access shared passwords"
+                >
+                    <Key class="h-3.5 w-3.5" />
+                    <span>Link Team Vault</span>
+                </Button>
+
                 <Button
                     v-if="isUnlocked"
                     size="sm"
@@ -544,6 +630,42 @@ async function quickCopyPassword(item: VaultItemData, e: Event) {
                 >
                     <Unlock class="h-4 w-4" />
                     <span>Unlock Vault</span>
+                </Button>
+            </div>
+        </div>
+
+        <!-- Team Vault Linking Warning Banner for unlinked members -->
+        <div
+            v-if="!team.is_personal && isUnlocked && !userHasTeamKey"
+            class="rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-800 dark:text-amber-300 flex flex-wrap items-center justify-between gap-3 shadow-xs"
+        >
+            <div class="flex items-center gap-2">
+                <AlertCircle class="h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400" />
+                <span>
+                    <strong class="font-semibold">Team Vault Access Required:</strong>
+                    {{ isTeamKeyConfigured
+                        ? 'Enter the Team Access Key provided by your workspace admin to unlock and view passwords in this workspace.'
+                        : 'The workspace owner has not configured the Team Vault Key yet. Ask an admin to click "Team Access Key" above.' }}
+                </span>
+            </div>
+            <div class="flex items-center gap-2">
+                <Button
+                    v-if="isTeamKeyConfigured"
+                    size="sm"
+                    class="h-7 text-xs bg-amber-600 hover:bg-amber-700 text-white shrink-0 gap-1"
+                    @click="showTeamLinkModal = true"
+                >
+                    <Key class="h-3 w-3" />
+                    <span>Enter Team Key</span>
+                </Button>
+                <Button
+                    v-else-if="canManageTrash"
+                    size="sm"
+                    class="h-7 text-xs bg-primary text-primary-foreground shrink-0 gap-1"
+                    @click="showTeamSetupModal = true"
+                >
+                    <Key class="h-3 w-3" />
+                    <span>Configure Team Key</span>
                 </Button>
             </div>
         </div>
@@ -1020,5 +1142,26 @@ async function quickCopyPassword(item: VaultItemData, e: Event) {
     <EmergencyKitModal
         :open="showEmergencyKitModal"
         @update:open="(val) => (showEmergencyKitModal = val)"
+    />
+
+    <!-- Team Vault Setup Modal (Admin/Owner) -->
+    <TeamVaultSetupModal
+        v-if="!team.is_personal"
+        :open="showTeamSetupModal"
+        :team-name="team.name"
+        :team-slug="team.slug"
+        :can-manage="canManageTrash"
+        @update:open="(val) => (showTeamSetupModal = val)"
+        @configured="onTeamKeyConfigured"
+    />
+
+    <!-- Team Vault Link Modal (Member) -->
+    <TeamVaultLinkModal
+        v-if="!team.is_personal"
+        :open="showTeamLinkModal"
+        :team-name="team.name"
+        :initial-key="pendingJoinKey"
+        @update:open="(val) => (showTeamLinkModal = val)"
+        @linked="onTeamKeyLinked"
     />
 </template>
