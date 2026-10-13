@@ -35,16 +35,31 @@ class DashboardController extends Controller
                 ],
             ]);
 
+        // If a team has other members or invitations, it is automatically a shared team vault
+        if ($current_team->is_personal && ($current_team->members()->count() > 1 || $current_team->invitations()->exists())) {
+            $current_team->update(['is_personal' => false]);
+            $current_team->refresh();
+        }
+
         $canManageTrash = $current_team->is_personal || ($user->teamRole($current_team)?->isAtLeast(TeamRole::Admin) ?? false);
 
+        $baseQuery = VaultItem::query()->where('team_id', $current_team->id);
+        if ($current_team->is_personal) {
+            $baseQuery->where('user_id', $user->id);
+        }
+
         $stats = [
-            'total' => VaultItem::where('team_id', $current_team->id)->count(),
-            'logins' => VaultItem::where('team_id', $current_team->id)->where('type', 'login')->count(),
-            'cards' => VaultItem::where('team_id', $current_team->id)->where('type', 'card')->count(),
-            'notes' => VaultItem::where('team_id', $current_team->id)->where('type', 'note')->count(),
-            'servers' => VaultItem::where('team_id', $current_team->id)->where('type', 'server')->count(),
-            'favorites' => VaultItem::where('team_id', $current_team->id)->where('is_favorite', true)->count(),
-            'trash' => $canManageTrash ? VaultItem::onlyTrashed()->where('team_id', $current_team->id)->count() : 0,
+            'total' => (clone $baseQuery)->count(),
+            'logins' => (clone $baseQuery)->where('type', 'login')->count(),
+            'cards' => (clone $baseQuery)->where('type', 'card')->count(),
+            'notes' => (clone $baseQuery)->where('type', 'note')->count(),
+            'servers' => (clone $baseQuery)->where('type', 'server')->count(),
+            'favorites' => (clone $baseQuery)->where('is_favorite', true)->count(),
+            'trash' => $canManageTrash
+                ? ($current_team->is_personal
+                    ? VaultItem::onlyTrashed()->where('team_id', $current_team->id)->where('user_id', $user->id)->count()
+                    : VaultItem::onlyTrashed()->where('team_id', $current_team->id)->count())
+                : 0,
         ];
 
         return Inertia::render('Dashboard', [

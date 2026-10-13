@@ -478,4 +478,62 @@ test('team owner can sync team vault key and member seamlessly receives team_vau
         ]);
 });
 
+test('vault items API response is sanitized and does not leak email, user id or unnecessary fields', function () {
+    $user = User::factory()->create(['email' => 'secret_admin@example.com', 'name' => 'Admin']);
+    $team = $user->currentTeam;
+
+    VaultItem::create([
+        'team_id' => $team->id,
+        'user_id' => $user->id,
+        'type' => 'server',
+        'title' => 'BigRock SSH',
+        'encrypted_data' => 'enc_blob',
+        'iv' => 'iv_blob',
+        'folder' => 'Production',
+    ]);
+
+    $response = $this->actingAs($user)->getJson(route('vault.items.index', $team->slug));
+
+    $response->assertOk();
+    $itemData = $response->json('items.0');
+
+    expect($itemData)->toHaveKeys(['id', 'type', 'title', 'encrypted_data', 'iv', 'is_favorite', 'folder', 'updated_at', 'user'])
+        ->and($itemData)->not->toHaveKey('user_id')
+        ->and($itemData)->not->toHaveKey('team_id')
+        ->and($itemData)->not->toHaveKey('deleted_at')
+        ->and($itemData)->not->toHaveKey('created_at')
+        ->and($itemData['user'])->toEqual(['name' => 'Admin'])
+        ->and($itemData['user'])->not->toHaveKey('id')
+        ->and($itemData['user'])->not->toHaveKey('email');
+});
+
+test('personal vault items are strictly scoped to the owner, preventing key mismatch for members', function () {
+    $owner = User::factory()->create();
+    $personalTeam = $owner->currentTeam; // is_personal = true
+
+    // Item created by owner in personal vault
+    VaultItem::create([
+        'team_id' => $personalTeam->id,
+        'user_id' => $owner->id,
+        'type' => 'login',
+        'title' => 'Personal Secret',
+        'encrypted_data' => 'owner_encrypted_data',
+        'iv' => 'owner_iv',
+    ]);
+
+    // Another user who is somehow attached to this team
+    $otherUser = User::factory()->create();
+    $personalTeam->memberships()->create(['user_id' => $otherUser->id, 'role' => TeamRole::Member]);
+
+    // Owner sees their item
+    $ownerResponse = $this->actingAs($owner)->getJson(route('vault.items.index', $personalTeam->slug));
+    $ownerResponse->assertOk();
+    expect($ownerResponse->json('items'))->toHaveCount(1);
+
+    // Other member querying personal vault receives 0 items because they cannot decrypt owner's personal items
+    $memberResponse = $this->actingAs($otherUser)->getJson(route('vault.items.index', $personalTeam->slug));
+    $memberResponse->assertOk();
+    expect($memberResponse->json('items'))->toHaveCount(0);
+});
+
 

@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Vault;
 
 use App\Enums\TeamRole;
 use App\Http\Controllers\Controller;
+use App\Http\Resources\VaultItemResource;
 use App\Models\Team;
 use App\Models\VaultAuditLog;
 use App\Models\VaultItem;
@@ -28,7 +29,12 @@ class VaultItemController extends Controller
 
         $query = VaultItem::query()
             ->where('team_id', $current_team->id)
-            ->with('user:id,name,email');
+            ->with('user:id,name');
+
+        // Personal vault items are encrypted with each user's personal key; scope strictly to the authenticated user
+        if ($current_team->is_personal) {
+            $query->where('user_id', $request->user()->id);
+        }
 
         if ($request->boolean('trash')) {
             $query->onlyTrashed();
@@ -45,7 +51,7 @@ class VaultItemController extends Controller
         $items = $query->latest('updated_at')->get();
 
         return response()->json([
-            'items' => $items,
+            'items' => VaultItemResource::collection($items),
         ]);
     }
 
@@ -89,7 +95,7 @@ class VaultItemController extends Controller
 
         return response()->json([
             'message' => 'Vault item created securely.',
-            'item' => $item->load('user:id,name,email'),
+            'item' => new VaultItemResource($item->load('user:id,name')),
         ], 201);
     }
 
@@ -140,7 +146,7 @@ class VaultItemController extends Controller
 
         return response()->json([
             'message' => 'Vault item updated securely.',
-            'item' => $item->load('user:id,name,email'),
+            'item' => new VaultItemResource($item->load('user:id,name')),
         ]);
     }
 
@@ -201,7 +207,7 @@ class VaultItemController extends Controller
 
         return response()->json([
             'message' => 'Item restored successfully.',
-            'item' => $item->load('user:id,name,email'),
+            'item' => new VaultItemResource($item->load('user:id,name')),
         ]);
     }
 
@@ -235,7 +241,7 @@ class VaultItemController extends Controller
         abort_if($item->team_id !== $current_team->id, 404);
 
         $history = $item->histories()
-            ->with('user:id,name,email')
+            ->with('user:id,name')
             ->latest('id')
             ->get();
 
@@ -280,7 +286,7 @@ class VaultItemController extends Controller
 
         return response()->json([
             'message' => 'Vault item restored to selected version.',
-            'item' => $item->load('user:id,name,email'),
+            'item' => new VaultItemResource($item->load('user:id,name')),
         ]);
     }
 

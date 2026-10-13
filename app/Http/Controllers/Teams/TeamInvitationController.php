@@ -31,6 +31,10 @@ class TeamInvitationController extends Controller
             'expires_at' => now()->addDays(3),
         ]);
 
+        if ($team->is_personal) {
+            $team->update(['is_personal' => false]);
+        }
+
         Notification::route('mail', $invitation->email)
             ->notify(new TeamInvitationNotification($invitation));
 
@@ -69,6 +73,10 @@ class TeamInvitationController extends Controller
                 ['user_id' => $user->id],
                 ['role' => $invitation->role],
             );
+
+            if ($team->is_personal) {
+                $team->update(['is_personal' => false]);
+            }
 
             $invitation->update(['accepted_at' => now()]);
 

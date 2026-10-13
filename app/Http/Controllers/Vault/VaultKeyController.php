@@ -22,6 +22,12 @@ class VaultKeyController extends Controller
     {
         $user = $request->user();
 
+        // If team has other members or invitations, treat as a shared team vault
+        if ($current_team->is_personal && ($current_team->members()->count() > 1 || $current_team->invitations()->exists())) {
+            $current_team->update(['is_personal' => false]);
+            $current_team->refresh();
+        }
+
         $userVaultKey = $user->vaultKey;
         $teamVaultKey = null;
         $teamVaultKeyRaw = null;
@@ -238,7 +244,10 @@ class VaultKeyController extends Controller
      */
     public function setupTeamKey(Request $request, Team $current_team): JsonResponse
     {
-        abort_if($current_team->is_personal, 400, 'Personal vaults do not have team keys.');
+        if ($current_team->is_personal) {
+            $current_team->update(['is_personal' => false]);
+            $current_team->refresh();
+        }
 
         $user = $request->user();
 
@@ -298,7 +307,10 @@ class VaultKeyController extends Controller
      */
     public function linkTeamKey(Request $request, Team $current_team): JsonResponse
     {
-        abort_if($current_team->is_personal, 400, 'Personal vaults do not have team keys.');
+        if ($current_team->is_personal) {
+            $current_team->update(['is_personal' => false]);
+            $current_team->refresh();
+        }
 
         $user = $request->user();
 
@@ -340,7 +352,10 @@ class VaultKeyController extends Controller
      */
     public function syncTeamKey(Request $request, Team $current_team): JsonResponse
     {
-        abort_if($current_team->is_personal, 400, 'Personal vaults do not have team keys.');
+        if ($current_team->is_personal) {
+            $current_team->update(['is_personal' => false]);
+            $current_team->refresh();
+        }
 
         $user = $request->user();
         $isOwnerOrAdmin = $user->teamRole($current_team)?->isAtLeast(TeamRole::Admin) ?? false;
